@@ -1,35 +1,32 @@
 #%%
-from black import out
 import numpy as np
 import pandas as pd
-from pyparsing import col
 import seaborn as sns
+from sklearn.model_selection import train_test_split
 import tensorflow as tf
-from sklearn import model_selection
 from sklearn.preprocessing import MinMaxScaler, OrdinalEncoder, StandardScaler
 from tensorflow import keras
 
-# from rich import print
-
 #%%
 class DataLoader:
-    def __init__(self, dataset_name: str):
+    def __init__(self, dataset_name: str, embedding_cols: list, continuous_cols: list):
         self.dataset = dataset_name
+        self.embedding_cols = embedding_cols
+        self.continuous_cols = continuous_cols
 
     def _load_raw(self):
         return sns.load_dataset(self.dataset)
 
     def _process(self, data: pd.DataFrame):
-        embedding_cols = ["sex", "smoker", "day", "time"]
-        continuous_cols = ["total_bill", "size"]
 
         # cat to integer
         self.oe = OrdinalEncoder(dtype=np.int8)
-        data[embedding_cols] = self.oe.fit_transform(data[embedding_cols])
+        data[self.embedding_cols] = self.oe.fit_transform(data[self.embedding_cols])
 
         # scale continuous
         self.scaler = StandardScaler()
-        data[continuous_cols] = self.scaler.fit_transform(data[continuous_cols])
+        # self.scaler = MinMaxScaler()
+        data[self.continuous_cols] = self.scaler.fit_transform(data[self.continuous_cols])
 
         return data
 
@@ -40,129 +37,144 @@ class DataLoader:
 
 
 #%%
-df = DataLoader("tips").load()
 embedding_cols = ["sex", "smoker", "day", "time"]
-continuous_cols = ["total_bill", "size"]
+continuous_cols = ["total_bill", "size", "tip"]
+
+df = DataLoader(
+    "tips", embedding_cols=embedding_cols, continuous_cols=continuous_cols
+).load()
+
+train, validation, _, _ = train_test_split(df, df, test_size=0.2, random_state=42)
+
 
 #%%
-target_data = {col: pd.get_dummies(df[col].astype("category")) for col in embedding_cols}
-target_data["output_cont"] = df[continuous_cols]
+def dataset_from_dataframe(data: pd.DataFrame) -> tf.data.Dataset:
+    data = data.copy()
+    target_data = {col: data[col] for col in embedding_cols}
+    target_data["output_cont"] = data[continuous_cols]
 
-dataset = tf.data.Dataset.from_tensor_slices(
-    (
-        {col: df[col] for col in embedding_cols + continuous_cols},
-        target_data,
+    dataset = tf.data.Dataset.from_tensor_slices(
+        (
+            {col: data[col] for col in embedding_cols + continuous_cols},
+            {col: data[col] for col in embedding_cols + continuous_cols},
+            # target_data,
+        )
     )
-)
 
-target_data = tf.data.Dataset.from_tensor_slices(
-    target_data
-)
+    return dataset
 
-print(target_data)
-#%%
-class NNModel:
-    def __init__(self, embedding_cols: list, continuous_cols: list):
+
+cardinalities = df.nunique().to_dict()
+dataset = dataset_from_dataframe(train)
+validation_dataset = dataset_from_dataframe(validation)
+
+
+class TabularAE(keras.Model):
+    def __init__(self, embedding_cols: list, continuous_cols: list, cardinalities: dict):
+        super().__init__()
         self.embedding_cols = embedding_cols
         self.continuous_cols = continuous_cols
+        self.cardinalities = cardinalities
 
-    def _build_models(self):
-        # ---------- inputs ----------
-        inputs = {}
-        for col in self.embedding_cols + self.continuous_cols:
-            inputs[col] = keras.Input(shape=(1,), name=col)
-
-        # ---------- embedding layers ----------
-        embeddings = {}
+        # ----------------- Categorical Embeddings -----------------
+        self.embeddings = {}
         for col in self.embedding_cols:
-            cardinality = df[col].nunique()
-            print(f"{col} -> {cardinality}")
-            embeddings[col] = keras.layers.Embedding(
-                input_dim=cardinality + 1, output_dim=10
-            )(inputs[col])
+            self.embeddings[col] = keras.layers.Embedding(
+                input_dim=self.cardinalities[col] + 1, output_dim=10
+            )
 
-        embeddings_concatenated = tf.keras.layers.Concatenate()(list(embeddings.values()))
-        embeddings_concatenated = tf.keras.layers.Flatten()(embeddings_concatenated)
+        # concatenation
+        self.emb_concat = tf.keras.layers.Concatenate()
+        self.flatten = tf.keras.layers.Flatten()
 
-        # continuous inputs concatenation
-        continuous_concatenated = tf.keras.layers.Concatenate()(
-            [inputs[col] for col in self.continuous_cols]
-        )
+        # ----------------- Continuous Inputs -----------------
+        self.cont_concat = tf.keras.layers.Concatenate()
+        self.reshape_cont = tf.keras.layers.Reshape((-1,))
+        self.all_concatenated = tf.keras.layers.Concatenate()
 
-        all_concatenated = tf.keras.layers.Concatenate()(
-            [embeddings_concatenated, continuous_concatenated]
-        )
+        # ----------------- Bottleneck -----------------
+        self.dense1 = tf.keras.layers.Dense(units=64, activation="relu")
+        self.bottleneck = tf.keras.layers.Dense(units=5, activation="linear")
 
-        # dense layers
-        bottleneck = tf.keras.layers.Dense(units=16, activation="linear")(
-            all_concatenated
-        )
+        # ----------------- Outputs -----------------
+        # continuous
+        self.output_continuous = {
+            col: tf.keras.layers.Dense(units=1, activation="linear", name=f"output_{col}")
+            for col in self.continuous_cols
+        }
 
-        output_continuous = tf.keras.layers.Dense(
-            units=len(continuous_cols), name="output_cont"
-        )(bottleneck)
-
-        output_categorical = {
+        # categorical
+        self.output_categorical = {
             col: tf.keras.layers.Dense(
-                units=df[col].nunique(), activation="softmax", name=f"output_{col}"
-            )(bottleneck)
-            for col in embedding_cols
+                units=self.cardinalities[col], activation="softmax", name=f"output_{col}"
+            )
+            for col in self.embedding_cols
         }
 
-        outputs = {k: v for k, v in output_categorical.items()}
-        outputs["output_cont"] = output_continuous
-        print(outputs)
-        model = tf.keras.models.Model(
-            inputs=list(inputs.values()),
-            outputs=outputs,
-        )
+        self.outputs = self.output_categorical | self.output_continuous
 
-        encoder = tf.keras.models.Model(inputs=list(inputs.values()), outputs=bottleneck)
-        decoder = tf.keras.models.Model(inputs=bottleneck, outputs=outputs)
-
-        return model, encoder, decoder
-
-    def get_compiled_models(self, optim="adam", loss="mse"):
-        model, encoder, decoder = self._build_models()
-
-        losses = {
-            f"output_{col}": tf.keras.losses.CategoricalCrossentropy()
-            for col in embedding_cols
+    def call(self, inputs, return_bottleneck=False):
+        embeddings = {
+            col: self.embeddings[col](inputs[col]) for col in self.embedding_cols
         }
-        losses["output_cont"] = "mse"
-        print(losses)
-        model.compile(
-            optimizer=optim,
-            loss=losses,
+        embeddings = self.flatten(self.emb_concat(list(embeddings.values())))
+
+        continuous_concatenated = self.cont_concat(
+            [self.reshape_cont(inputs[col]) for col in self.continuous_cols]
         )
 
-        return model, encoder, decoder
+        all_concatenated = self.all_concatenated([embeddings, continuous_concatenated])
+
+        x = self.dense1(all_concatenated)
+        bottleneck = self.bottleneck(x)
+
+        if return_bottleneck:
+            return bottleneck
+
+        outputs = {colname: layer(bottleneck) for colname, layer in self.outputs.items()}
+
+        return outputs
 
 
-#%%
-model, encoder, decoder = NNModel(embedding_cols, continuous_cols).get_compiled_models(
-    optim=tf.keras.optimizers.Adam(learning_rate=0.0001)
-)
-# tf.keras.utils.plot_model(model, "model.png", show_shapes=True)
+    def decode(self, bottleneck):
+        outputs = {colname: layer(bottleneck) for colname, layer in self.outputs.items()}
+
+        return outputs
 
 
-#%%
+model = TabularAE(embedding_cols, continuous_cols, cardinalities)
 tensorboard_callback = tf.keras.callbacks.TensorBoard(
     log_dir="logs/fit/", histogram_freq=1
 )
+
+losses = {
+    col: tf.keras.losses.SparseCategoricalCrossentropy()
+    if col in embedding_cols
+    else "mse"
+    for col in embedding_cols + continuous_cols
+}
+
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    loss=losses,
+)
+
 model.fit(
-    dataset.shuffle(256).batch(16).prefetch(5),
-    epochs=100,
+    dataset.shuffle(256).batch(32).prefetch(5),
+    validation_data=validation_dataset.batch(512).prefetch(5),
+    epochs=250,
     callbacks=[tensorboard_callback],
 )
 
 
 #%%
 original = list(dataset.batch(1).take(1))[0][0]
-representation = encoder(original)
-reconstructed = decoder(representation)
-for t_o, t_r in zip(original.values(), reconstructed.values()):
-    print(t_o, t_r)
-    print("-" * 20)
+print(original)
 
-print(representation)
+representation = model(original, return_bottleneck=True)
+reconstructed = model.decode(representation)
+for t_o, t_r in zip(original.values(), reconstructed.values()):
+    print("-" * 20)
+    print(t_o, t_r)
+print("=" * 20)
+print(f"REPRESENTATION: {representation}")
