@@ -1,0 +1,16 @@
+model_config:
+  training: null
+  architecture:
+    bottleneck_dim: 32
+    embedding_dim: 10
+
+data_config:
+  embedding_cols:
+    - sex
+    - smoker
+    - day
+    - time
+  continuous_cols:
+    - total_bill
+    - size
+    - tip

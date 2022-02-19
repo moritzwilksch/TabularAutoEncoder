@@ -4,7 +4,12 @@ from tensorflow import keras
 
 class TabularAE(keras.Model):
     def __init__(
-        self, embedding_cols: list, continuous_cols: list, cardinalities: dict
+        self,
+        embedding_cols: list,
+        continuous_cols: list,
+        cardinalities: dict,
+        bottleneck_dim: int,
+        embedding_dim: int,
     ):
         super().__init__()
         self.embedding_cols = embedding_cols
@@ -15,7 +20,7 @@ class TabularAE(keras.Model):
         self.embeddings = {}
         for col in self.embedding_cols:
             self.embeddings[col] = keras.layers.Embedding(
-                input_dim=self.cardinalities[col] + 1, output_dim=10
+                input_dim=self.cardinalities[col] + 1, output_dim=embedding_dim
             )
 
         # concatenation
@@ -28,7 +33,7 @@ class TabularAE(keras.Model):
         self.all_concatenated = tf.keras.layers.Concatenate()
 
         # ----------------- Bottleneck -----------------
-        self.dense1 = tf.keras.layers.Dense(units=64, activation="relu")
+        self.dense1 = tf.keras.layers.Dense(units=bottleneck_dim, activation="relu")
         self.bottleneck = tf.keras.layers.Dense(units=5, activation="linear")
 
         # ----------------- Outputs -----------------

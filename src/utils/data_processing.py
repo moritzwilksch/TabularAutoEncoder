@@ -1,8 +1,8 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 import seaborn as sns
 import tensorflow as tf
-from sklearn.preprocessing import MinMaxScaler, OrdinalEncoder, StandardScaler
+from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 
 
 class DataLoader:
@@ -22,7 +22,6 @@ class DataLoader:
 
         # scale continuous
         self.scaler = StandardScaler()
-        # self.scaler = MinMaxScaler()
         data[self.continuous_cols] = self.scaler.fit_transform(
             data[self.continuous_cols]
         )
