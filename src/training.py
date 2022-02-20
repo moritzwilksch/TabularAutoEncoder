@@ -1,3 +1,5 @@
+import time
+
 import tensorflow as tf
 import yaml
 from sklearn.model_selection import train_test_split
@@ -29,7 +31,13 @@ validation_dataset = dataset_from_dataframe(
     validation, embedding_cols=EMBEDDING_COLS, continuous_cols=CONTINUOUS_COLS
 )
 
-model = TabularAE(EMBEDDING_COLS, CONTINUOUS_COLS, cardinalities, embedding_dim=EMBEDDING_DIM, bottleneck_dim=BOTTLENECK_DIM)
+model = TabularAE(
+    EMBEDDING_COLS,
+    CONTINUOUS_COLS,
+    cardinalities,
+    embedding_dim=EMBEDDING_DIM,
+    bottleneck_dim=BOTTLENECK_DIM,
+)
 tensorboard_callback = tf.keras.callbacks.TensorBoard(
     log_dir="logs/fit/", histogram_freq=1
 )
@@ -42,26 +50,24 @@ losses = {
 }
 
 loss_weights = {
-    col: 1
-    if col in EMBEDDING_COLS
-    else 2
-    for col in EMBEDDING_COLS + CONTINUOUS_COLS
+    col: 1 if col in EMBEDDING_COLS else 2 for col in EMBEDDING_COLS + CONTINUOUS_COLS
 }
 
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
     loss=losses,
-    loss_weights=loss_weights
+    loss_weights=loss_weights,
 )
 
-
+tic = time.perf_counter()
 model.fit(
     dataset.shuffle(256).batch(32).prefetch(5),
     validation_data=validation_dataset.batch(512).prefetch(5),
     epochs=250,
     callbacks=[tensorboard_callback],
 )
-
+tac = time.perf_counter()
+print(f"Fitting took {tac-tic:.1f} seconds.")
 model.save_weights("src/models/saved/tabae.h5")
 
 
