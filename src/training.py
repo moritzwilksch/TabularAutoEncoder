@@ -29,7 +29,7 @@ validation_dataset = dataset_from_dataframe(
     validation, embedding_cols=EMBEDDING_COLS, continuous_cols=CONTINUOUS_COLS
 )
 
-model = TabularAE(EMBEDDING_COLS, CONTINUOUS_COLS, cardinalities)
+model = TabularAE(EMBEDDING_COLS, CONTINUOUS_COLS, cardinalities, embedding_dim=EMBEDDING_DIM, bottleneck_dim=BOTTLENECK_DIM)
 tensorboard_callback = tf.keras.callbacks.TensorBoard(
     log_dir="logs/fit/", histogram_freq=1
 )
@@ -41,10 +41,19 @@ losses = {
     for col in EMBEDDING_COLS + CONTINUOUS_COLS
 }
 
+loss_weights = {
+    col: 1
+    if col in EMBEDDING_COLS
+    else 2
+    for col in EMBEDDING_COLS + CONTINUOUS_COLS
+}
+
 model.compile(
     optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
     loss=losses,
+    loss_weights=loss_weights
 )
+
 
 model.fit(
     dataset.shuffle(256).batch(32).prefetch(5),
@@ -52,6 +61,8 @@ model.fit(
     epochs=250,
     callbacks=[tensorboard_callback],
 )
+
+model.save_weights("src/models/saved/tabae.h5")
 
 
 original = list(dataset.batch(1).take(1))[0][0]
