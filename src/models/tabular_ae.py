@@ -33,15 +33,13 @@ class TabularAE(keras.Model):
         self.all_concatenated = tf.keras.layers.Concatenate()
 
         # ----------------- Bottleneck -----------------
-        self.dense1 = tf.keras.layers.Dense(units=bottleneck_dim, activation="relu")
+        self.dense1 = tf.keras.layers.Dense(units=bottleneck_dim, activation="swish")
         self.bottleneck = tf.keras.layers.Dense(units=5, activation="linear")
 
         # ----------------- Outputs -----------------
         # continuous
         self.output_continuous = {
-            col: tf.keras.layers.Dense(
-                units=1, activation="linear", name=f"output_{col}"
-            )
+            col: tf.keras.layers.Dense(units=1, activation="linear", name=f"output_{col}")
             for col in self.continuous_cols
         }
 
@@ -75,15 +73,11 @@ class TabularAE(keras.Model):
         if return_bottleneck:
             return bottleneck
 
-        outputs = {
-            colname: layer(bottleneck) for colname, layer in self.outputs.items()
-        }
+        outputs = {colname: layer(bottleneck) for colname, layer in self.outputs.items()}
 
         return outputs
 
     def decode(self, bottleneck):
-        outputs = {
-            colname: layer(bottleneck) for colname, layer in self.outputs.items()
-        }
+        outputs = {colname: layer(bottleneck) for colname, layer in self.outputs.items()}
 
         return outputs

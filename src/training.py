@@ -38,9 +38,26 @@ model = TabularAE(
     embedding_dim=EMBEDDING_DIM,
     bottleneck_dim=BOTTLENECK_DIM,
 )
+
+# Callbacks
 tensorboard_callback = tf.keras.callbacks.TensorBoard(
     log_dir="logs/fit/", histogram_freq=1
 )
+
+
+N_EPOCHS = 250
+STARTING_LR = 0.01
+
+
+def scheduler(epoch, lr):
+    progress = epoch / N_EPOCHS
+    if progress < 0.7:
+        return STARTING_LR
+    else:
+        return STARTING_LR / 2
+
+
+lr_schedule = tf.keras.callbacks.LearningRateScheduler(scheduler)
 
 losses = {
     col: tf.keras.losses.SparseCategoricalCrossentropy()
@@ -54,7 +71,7 @@ loss_weights = {
 }
 
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    optimizer=tf.keras.optimizers.Adam(learning_rate=STARTING_LR),
     loss=losses,
     loss_weights=loss_weights,
 )
@@ -63,8 +80,8 @@ tic = time.perf_counter()
 model.fit(
     dataset.shuffle(256).batch(32).prefetch(5),
     validation_data=validation_dataset.batch(512).prefetch(5),
-    epochs=250,
-    callbacks=[tensorboard_callback],
+    epochs=N_EPOCHS,
+    callbacks=[tensorboard_callback],  # no schedule seems to work better
 )
 tac = time.perf_counter()
 print(f"Fitting took {tac-tic:.1f} seconds.")
